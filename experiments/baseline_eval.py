@@ -11,8 +11,13 @@ Usage (from the mpx_tita root):
     pixi run python experiments/baseline_eval.py                       # all scenes, all scenarios
     pixi run python experiments/baseline_eval.py --scenes flat --scenarios stand vx_step
     pixi run python experiments/baseline_eval.py --save-traj           # also store per-step logs
+    pixi run python experiments/baseline_eval.py --repeats 5           # success rate, mean ± std
 
-Output: experiments/results/<timestamp>_<tag>/{meta.json, metrics.csv, metrics.json, traj/*.npz}
+Output: experiments/results/<timestamp>_<tag>/
+    meta.json     git commit, settings, scenarios
+    metrics.csv   one row per run (scene, scenario, repeat)
+    summary.csv   per (scene, scenario): success rate, fall time and metrics mean/std over repeats
+    traj/*.npz    per-step logs at the WBC rate (--save-traj)
 """
 import argparse
 import csv
@@ -200,6 +205,9 @@ def main():
     parser.add_argument("--tag", default="baseline", help="label appended to the results folder")
     parser.add_argument("--out", default=os.path.join(dir_path, "results"))
     parser.add_argument("--save-traj", action="store_true", help="store per-step logs as .npz")
+    parser.add_argument("--repeats", type=int, default=1,
+                        help="runs per (scene, scenario); the runs differ only through the "
+                             "non-determinism of JAX on the GPU, so this measures how reliable a result is")
     args = parser.parse_args()
 
     os.chdir(repo_root)  # the wrapper's persistent JAX cache is ./jax_cache
@@ -208,7 +216,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     meta = dict(
-        date=stamp, tag=args.tag, git=git_info(repo_root), scenes=args.scenes,
+        date=stamp, tag=args.tag, git=git_info(repo_root), scenes=args.scenes, repeats=args.repeats,
         scenarios={k: SCENARIOS[k] for k in args.scenarios},
         settle_s=SETTLE_S, fall_tilt_rad=FALL_TILT_RAD, fall_com_height=FALL_COM_HEIGHT,
         config=dict(simulation_frequency=config.simulation_frequency,
@@ -231,26 +239,75 @@ def main():
         model = mujoco.MjModel.from_xml_path(os.path.join(repo_root, f"mpx/data/tita/scene_{scene}.xml"))
         model.opt.timestep = config.dt_sim
         for name in args.scenarios:
-            tic = time.perf_counter()
-            metrics, traj = run_episode(mpc, model, SCENARIOS[name])
-            row = dict(scene=scene, scenario=name, **metrics)
-            rows.append(row)
-            status = f"FELL at {metrics['fall_time_s']:.2f}s" if metrics["fell"] else "ok"
-            print(f"[{scene:6s} {name:9s}] {status:14s} rmse_v {metrics['rmse_v_steady']:.3f} "
-                  f"rmse_w {metrics['rmse_w_steady']:.3f} rmse_h {metrics['rmse_h_steady']:.3f} "
-                  f"tilt {metrics['max_tilt_deg']:5.1f}deg  mpc {metrics['mpc_ms_mean']:.1f}ms "
-                  f"({time.perf_counter() - tic:.0f}s wall)")
-            if args.save_traj:
-                os.makedirs(os.path.join(out_dir, "traj"), exist_ok=True)
-                np.savez_compressed(os.path.join(out_dir, "traj", f"{scene}_{name}.npz"), **traj)
+            for rep in range(args.repeats):
+                tic = time.perf_counter()
+                metrics, traj = run_episode(mpc, model, SCENARIOS[name])
+                row = dict(scene=scene, scenario=name, repeat=rep, **metrics)
+                rows.append(row)
+                status = f"FELL at {metrics['fall_time_s']:.2f}s" if metrics["fell"] else "ok"
+                print(f"[{scene:6s} {name:9s} #{rep}] {status:14s} rmse_v {metrics['rmse_v_steady']:.3f} "
+                      f"rmse_w {metrics['rmse_w_steady']:.3f} rmse_h {metrics['rmse_h_steady']:.3f} "
+                      f"tilt {metrics['max_tilt_deg']:5.1f}deg  mpc {metrics['mpc_ms_mean']:.1f}ms "
+                      f"({time.perf_counter() - tic:.0f}s wall)", flush=True)
+                if args.save_traj:
+                    os.makedirs(os.path.join(out_dir, "traj"), exist_ok=True)
+                    np.savez_compressed(os.path.join(out_dir, "traj", f"{scene}_{name}_{rep}.npz"), **traj)
 
+    write_csv(os.path.join(out_dir, "metrics.csv"), rows)
     with open(os.path.join(out_dir, "metrics.json"), "w") as f:
         json.dump(rows, f, indent=2)
-    with open(os.path.join(out_dir, "metrics.csv"), "w", newline="") as f:
+    summary = summarize(rows)
+    write_csv(os.path.join(out_dir, "summary.csv"), summary)
+    print_summary(summary)
+    print(f"\nResults written to {out_dir}")
+
+
+# Metrics summarized over repeats. Tracking/effort metrics only over the repeats that did not
+# fall (a fallen run is cut short, so its errors are not comparable); fall time over those that fell.
+SUMMARY_METRICS = ["rmse_v_steady", "rmse_w_steady", "rmse_h_steady", "max_tilt_deg",
+                   "mean_abs_tau", "peak_abs_tau", "energy_J", "mpc_ms_mean", "wbc_ms_mean"]
+
+
+def summarize(rows):
+    groups = {}
+    for r in rows:
+        groups.setdefault((r["scene"], r["scenario"]), []).append(r)
+    out = []
+    for (scene, scenario), rs in groups.items():
+        ok = [r for r in rs if not r["fell"]]
+        fell = [r for r in rs if r["fell"]]
+        s = dict(scene=scene, scenario=scenario, n=len(rs), n_ok=len(ok),
+                 success_rate=len(ok) / len(rs))
+        ft = np.array([r["fall_time_s"] for r in fell], dtype=float)
+        s["fall_time_mean"] = float(ft.mean()) if ft.size else float("nan")
+        s["fall_time_std"] = float(ft.std()) if ft.size else float("nan")
+        for m in SUMMARY_METRICS:
+            v = np.array([r[m] for r in ok], dtype=float)
+            v = v[np.isfinite(v)]
+            s[f"{m}_mean"] = float(v.mean()) if v.size else float("nan")
+            s[f"{m}_std"] = float(v.std()) if v.size else float("nan")
+        out.append(s)
+    return out
+
+
+def print_summary(summary):
+    print("\nSummary (tracking errors over the runs that did not fall):")
+    print(f"{'scene':6s} {'scenario':9s} {'success':>8s} {'fall t [s]':>12s} {'rmse_v':>14s} "
+          f"{'rmse_w':>14s} {'rmse_h':>14s}")
+    for s in summary:
+        ft = (f"{s['fall_time_mean']:.2f}±{s['fall_time_std']:.2f}"
+              if np.isfinite(s["fall_time_mean"]) else "-")
+        cells = [f"{s[m + '_mean']:.3f}±{s[m + '_std']:.3f}" if s["n_ok"] else "-"
+                 for m in ("rmse_v_steady", "rmse_w_steady", "rmse_h_steady")]
+        print(f"{s['scene']:6s} {s['scenario']:9s} {s['n_ok']:>3d}/{s['n']:<4d} {ft:>12s} "
+              f"{cells[0]:>14s} {cells[1]:>14s} {cells[2]:>14s}")
+
+
+def write_csv(path, rows):
+    with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
-    print(f"\nResults written to {out_dir}")
 
 
 if __name__ == "__main__":
