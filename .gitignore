@@ -9,3 +9,5 @@ c_generated_code/
 *.TXT
 *.pkl
 *.egg*info/
+# Experiment outputs (curated copies live in the thesis repo)
+experiments/results/
