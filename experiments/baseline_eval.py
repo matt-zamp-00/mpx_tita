@@ -20,6 +20,7 @@ Output: experiments/results/<timestamp>_<tag>/
     traj/*.npz    per-step logs at the WBC rate (--save-traj)
 """
 import argparse
+import collections
 import csv
 import datetime
 import json
@@ -102,8 +103,11 @@ def rmse(x):
     return float(np.sqrt(np.mean(x ** 2))) if x.size else float("nan")
 
 
-def run_episode(mpc, model, scenario):
-    """One episode; returns (metrics dict, trajectory dict)."""
+def run_episode(mpc, model, scenario, pert=None):
+    """One episode; returns (metrics dict, trajectory dict). pert: perturbations.Perturbation of
+    the simulated robot (None = nominal); the controller always keeps its nominal model."""
+    if pert is not None:
+        model = pert.apply_model(model)
     data = mujoco.MjData(model)
     base_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, config.base_body_name)
     contact_ids = sim_utils.geom_ids(model, config.contact_frame)
@@ -115,6 +119,10 @@ def run_episode(mpc, model, scenario):
     segments = scenario["segments"]
 
     _reset_to_initial_state(model, data)
+    if pert is not None:
+        pert.apply_initial_state(model, data)
+    latency = pert.latency_steps(dt) if pert is not None else 0
+    pending = collections.deque()  # (physics step at which to apply, torques)
     mpc_state = mpc.reset()
     theta_prev = 0.0
     tau = jnp.zeros((1, model.nu))
@@ -151,7 +159,7 @@ def run_episode(mpc, model, scenario):
             )
             tau_np = np.asarray(tau[0])
             wbc_ms.append(1e3 * (time.perf_counter() - tic))
-            data.ctrl[:] = tau_np
+            pending.append((k + latency, tau_np))
 
             # Log at the WBC rate (100 Hz): cheap and enough for tracking metrics.
             x0_np = np.asarray(x0)
@@ -167,6 +175,10 @@ def run_episode(mpc, model, scenario):
                 fell_at = t
                 break
 
+        while pending and pending[0][0] <= k:   # torques whose latency has elapsed
+            data.ctrl[:] = pending.popleft()[1]
+        if pert is not None:
+            data.xfrc_applied[base_body_id] = pert.push_wrench(t, data.xmat[base_body_id])
         mujoco.mj_step(model, data)
 
     traj = {k: np.asarray(v) for k, v in log.items()}
