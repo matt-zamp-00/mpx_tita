@@ -123,6 +123,8 @@ def main():
                         help="random mode: perturbations.RANGES preset (main = payload 0-2 kg)")
     parser.add_argument("--hard", action="store_true",
                         help="sweep mode: only the hard axes (perturbations.HARD_AXES), all scenarios")
+    parser.add_argument("--set", nargs="+", default=[], metavar="KEY=VALUE",
+                        help="config overrides, e.g. N=24 terminal_stability=dcm W_mpc.w_stab=1e6")
     parser.add_argument("--tag", default=None, help="default: baseline_<ranges> / baseline_hard")
     parser.add_argument("--out", default=os.path.join(be.dir_path, "results"))
     args = parser.parse_args()
@@ -137,13 +139,14 @@ def main():
     if args.scenarios is None:
         args.scenarios = SWEEP_SCENARIOS if args.mode == "sweep" else list(be.SCENARIOS)
 
+    overrides = be.apply_overrides(be.config, args.set)
     os.chdir(be.repo_root)
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = os.path.join(args.out, f"{stamp}_{args.mode}_{args.tag}")
     os.makedirs(out_dir, exist_ok=True)
     meta = dict(date=stamp, mode=args.mode, tag=args.tag, git=be.git_info(be.repo_root),
                 scenes=args.scenes, scenarios=args.scenarios, factors=args.factors,
-                seeds=args.seeds, base_seed=args.base_seed,
+                seeds=args.seeds, base_seed=args.base_seed, overrides=overrides,
                 sweep=P.SWEEP, ranges=args.ranges, random_ranges=P.RANGES[args.ranges],
                 nominal_perturbation=P.Perturbation().as_dict(),
                 jax_devices=[str(d) for d in be.jax.devices()])

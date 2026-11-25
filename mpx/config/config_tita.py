@@ -24,6 +24,9 @@ dt_mpc = 0.025
 N = 12
 mpc_horizon_s = N * dt_mpc
 mpc_iterations = 1
+# MPC terminal balance term (weight W_mpc w_stab): "com" = CoM over the wheel-contact midpoint
+# (original), "dcm" = capture point relative to the moving contacts (objectives._terminal_stability).
+terminal_stability = "com"
 wbc_lookahead_dt = 0.0
 
 dt_sim = 1.0 / simulation_frequency

@@ -99,8 +99,10 @@ class BatchedMPCControllerWrapper:
         else:
             self._posture_mask = jnp.zeros(self._nj).at[jnp.array(list(posture_joint_ids))].set(1.0)
 
-        cost     = partial(mpc_objectives.wheeled_dfcip_obj, config.d, config.N)
-        hess     = partial(mpc_objectives.wheeled_dfcip_hessian_gn, config.d, config.N)
+        # terminal_stability: "com" (CoM over the contacts, original) or "dcm" (capture point)
+        terminal = getattr(config, "terminal_stability", "com")
+        cost     = partial(mpc_objectives.wheeled_dfcip_obj, config.d, config.N, terminal=terminal, grav=config.grav)
+        hess     = partial(mpc_objectives.wheeled_dfcip_hessian_gn, config.d, config.N, terminal=terminal, grav=config.grav)
         dynamics = partial(mpc_dyn_model.wheeled_dfcip_dynamics, mjx_model, config.mass, config.grav, config.dt_mpc)
         fddp     = partial(optimizers.fddp_mpc, cost, dynamics, hess, False)
         ref_gen  = partial(mpc_utils.reference_generator_dfcip_online, config.N, config.dt_mpc, config.mass, config.grav, config.h_min, config.h_max,

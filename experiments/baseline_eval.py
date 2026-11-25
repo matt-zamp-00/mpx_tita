@@ -98,6 +98,32 @@ def git_info(path):
                 dirty=bool(run("status", "--porcelain")))
 
 
+def apply_overrides(cfg, items):
+    """Apply --set overrides to the config module before the controller is built.
+    "key=value" sets cfg.key; "W_mpc.key=value" / "W_wbc.key=value" set a weight in every phase.
+    Values are parsed as Python literals (1e6, 24, [0, 0, 1e2]), else kept as strings (dcm)."""
+    import ast
+    applied = {}
+    for item in items or []:
+        key, _, raw = item.partition("=")
+        try:
+            value = ast.literal_eval(raw)
+        except (ValueError, SyntaxError):
+            value = raw
+        if key.startswith(("W_mpc.", "W_wbc.")):
+            table, name = key.split(".", 1)
+            for phase in getattr(cfg, table).values():
+                if name not in phase["weights"]:
+                    raise KeyError(f"--set: {table} has no weight {name}")
+                phase["weights"][name] = value
+        else:
+            if not hasattr(cfg, key):
+                raise KeyError(f"--set: config has no attribute {key}")
+            setattr(cfg, key, value)
+        applied[key] = value
+    return applied
+
+
 def rmse(x):
     x = np.asarray(x)
     return float(np.sqrt(np.mean(x ** 2))) if x.size else float("nan")
@@ -220,7 +246,10 @@ def main():
     parser.add_argument("--repeats", type=int, default=1,
                         help="runs per (scene, scenario); the runs differ only through the "
                              "non-determinism of JAX on the GPU, so this measures how reliable a result is")
+    parser.add_argument("--set", nargs="+", default=[], metavar="KEY=VALUE",
+                        help="config overrides, e.g. N=24 terminal_stability=dcm W_mpc.w_stab=1e6")
     args = parser.parse_args()
+    overrides = apply_overrides(config, args.set)
 
     os.chdir(repo_root)  # the wrapper's persistent JAX cache is ./jax_cache
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -228,7 +257,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     meta = dict(
-        date=stamp, tag=args.tag, git=git_info(repo_root), scenes=args.scenes, repeats=args.repeats,
+        date=stamp, tag=args.tag, git=git_info(repo_root), scenes=args.scenes, repeats=args.repeats, overrides=overrides,
         scenarios={k: SCENARIOS[k] for k in args.scenarios},
         settle_s=SETTLE_S, fall_tilt_rad=FALL_TILT_RAD, fall_com_height=FALL_COM_HEIGHT,
         config=dict(simulation_frequency=config.simulation_frequency,

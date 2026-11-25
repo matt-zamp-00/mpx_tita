@@ -14,7 +14,21 @@ def penalty(constraint, alpha=0.1, sigma=5):
     )
     return jnp.where(constraint > sigma, log_barrier, quadratic_barrier)
 
-def wheeled_dfcip_obj(wheel_offset, N, W, reference, x, u, t):
+def _terminal_stability(pcom, vcom, c, theta, v, grav, terminal):
+    """Terminal balance residual (xy). "com": CoM over the contact midpoint (original).
+    "dcm": capture point of the pendulum relative to the moving contact,
+    (p - c) + (v_com - v_c) / omega0, omega0 = sqrt(g / h), h = CoM height above the contact
+    midpoint, v_c = v [cos theta, sin theta] the contact-midpoint velocity. Zero when the CoM is
+    over the contacts AND moves with them, so it does not ask the robot to stop (unlike the
+    absolute capture point) but penalises the CoM drifting away from the wheels."""
+    if terminal == "dcm":
+        h = jnp.maximum(pcom[2] - c[2], 0.1)
+        omega0 = jnp.sqrt(jnp.absolute(grav) / h)
+        v_c = v * jnp.array([jnp.cos(theta), jnp.sin(theta)])
+        return (pcom[:2] - c[:2]) + (vcom[:2] - v_c) / omega0
+    return pcom[:2] - c[:2]
+
+def wheeled_dfcip_obj(wheel_offset, N, W, reference, x, u, t, terminal="com", grav=9.81):
     pcom, vcom, c = x[0:3], x[3:6], x[6:9]
     vc_z, theta, v, w = x[9], x[10], x[11], x[12]
     a, ac_z, alpha = u[0], u[1], u[2]
@@ -35,7 +49,7 @@ def wheeled_dfcip_obj(wheel_offset, N, W, reference, x, u, t):
     h_contact   = vc_z                                                 
     h_moment    = jnp.cross(pl - pcom, fl) + jnp.cross(pr - pcom, fr) 
     h_fz        = jnp.minimum(fl[2], 0.0) ** 2 + jnp.minimum(fr[2], 0.0) ** 2  
-    h_stability = pcom[:2] - c[:2]                                      #
+    h_stability = _terminal_stability(pcom, vcom, c, theta, v, grav, terminal)
     u_bound     = jnp.array([W[16, 16], W[17, 17], W[18, 18]])           # |a|, |ac_z|, |alpha| bounds
     h_bound     = jnp.maximum(jnp.abs(u[0:3]) - u_bound, 0.0)
  
@@ -131,7 +145,7 @@ def wheeled_dfcip_obj(wheel_offset, N, W, reference, x, u, t):
 
     return jnp.where(t == N, term_cost, stage_cost)
 
-def wheeled_dfcip_hessian_gn(wheel_offset, N, W, reference, x, u, t):
+def wheeled_dfcip_hessian_gn(wheel_offset, N, W, reference, x, u, t, terminal="com", grav=9.81):
     w_diag = jnp.array([
         W[0, 0], W[0, 0], W[1, 1],
         W[2, 2], W[2, 2], W[3, 3],
@@ -165,7 +179,7 @@ def wheeled_dfcip_hessian_gn(wheel_offset, N, W, reference, x, u, t):
         h_contact   = jnp.array([vc_z_])
         h_moment    = jnp.cross(pl - pcom_, fl_) + jnp.cross(pr - pcom_, fr_)
         h_fz        = jnp.array([jnp.minimum(fl_[2], 0.0), jnp.minimum(fr_[2], 0.0)])
-        h_stability = pcom_[:2] - c_[:2]
+        h_stability = _terminal_stability(pcom_, vcom_, c_, theta_, v_, grav, terminal)
         u_bound     = jnp.array([W[16, 16], W[17, 17], W[18, 18]])
         h_bound     = jnp.maximum(jnp.abs(u[0:3]) - u_bound, 0.0)
  
