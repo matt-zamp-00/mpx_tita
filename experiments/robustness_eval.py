@@ -13,7 +13,9 @@ Two modes, both with the scenarios and metrics of baseline_eval.py:
 Usage (from the mpx_tita root):
     pixi run python experiments/robustness_eval.py sweep                                # ~20 min
     pixi run python experiments/robustness_eval.py sweep --factors latency_ms push_force_n
-    pixi run python experiments/robustness_eval.py random --seeds 5                    # ~30 min
+    pixi run python experiments/robustness_eval.py random --seeds 10        # main benchmark, ~1 h
+    pixi run python experiments/robustness_eval.py sweep --hard             # payload/push axes, ~10 min
+    pixi run python experiments/robustness_eval.py random --ranges wide     # first study (payload 0-5 kg)
 
 Output: experiments/results/<timestamp>_<mode>_<tag>/{meta.json, metrics.csv, summary.csv}
 """
@@ -95,7 +97,7 @@ def mode_random(args, mpc):
         for i, scenario in enumerate(args.scenarios):
             for seed in range(args.seeds):
                 rng = np.random.default_rng([args.base_seed, seed, list(be.SCENARIOS).index(scenario)])
-                pert = P.sample(rng, be.SCENARIOS[scenario]["duration"])
+                pert = P.sample(rng, be.SCENARIOS[scenario]["duration"], P.RANGES[args.ranges])
                 m = run_and_print(mpc, model, scene, scenario, pert, f"seed {seed}")
                 rows.append(dict(scene=scene, scenario=scenario, seed=seed, **m,
                                  **{f"p_{k}": v for k, v in pert.as_dict().items()}))
@@ -117,9 +119,19 @@ def main():
                         help="sweep mode: factors to vary")
     parser.add_argument("--seeds", type=int, default=5, help="random mode: perturbations per scenario")
     parser.add_argument("--base-seed", type=int, default=0, help="random mode: changes the whole set")
-    parser.add_argument("--tag", default="baseline")
+    parser.add_argument("--ranges", default="main", choices=list(P.RANGES),
+                        help="random mode: perturbations.RANGES preset (main = payload 0-2 kg)")
+    parser.add_argument("--hard", action="store_true",
+                        help="sweep mode: only the hard axes (perturbations.HARD_AXES), all scenarios")
+    parser.add_argument("--tag", default=None, help="default: baseline_<ranges> / baseline_hard")
     parser.add_argument("--out", default=os.path.join(be.dir_path, "results"))
     args = parser.parse_args()
+    if args.mode == "sweep" and args.hard:
+        args.factors = list(P.HARD_AXES)
+        if args.scenarios is None:
+            args.scenarios = list(be.SCENARIOS)
+    if args.tag is None:
+        args.tag = ("baseline_hard" if args.hard else "baseline") if args.mode == "sweep" else f"baseline_{args.ranges}"
     if args.scenes is None:
         args.scenes = ["flat"] if args.mode == "sweep" else be.SCENES
     if args.scenarios is None:
@@ -132,7 +144,7 @@ def main():
     meta = dict(date=stamp, mode=args.mode, tag=args.tag, git=be.git_info(be.repo_root),
                 scenes=args.scenes, scenarios=args.scenarios, factors=args.factors,
                 seeds=args.seeds, base_seed=args.base_seed,
-                sweep=P.SWEEP, random_ranges=P.RANDOM_RANGES,
+                sweep=P.SWEEP, ranges=args.ranges, random_ranges=P.RANGES[args.ranges],
                 nominal_perturbation=P.Perturbation().as_dict(),
                 jax_devices=[str(d) for d in be.jax.devices()])
     with open(os.path.join(out_dir, "meta.json"), "w") as f:

@@ -112,8 +112,10 @@ SWEEP = {
 }
 
 # Domain randomization ranges (uniform), also the training ranges for the residual (Phase 5).
-RANDOM_RANGES = {
-    "payload_kg":     (0.0, 5.0),
+# "main": the realistic benchmark (payload 0-2 kg, decided 2026-11-25). Payload and pushes beyond it
+#         are evaluated separately as hard axes (HARD_AXES, one factor at a time).
+# "wide": the first Phase 2 study (payload 0-5 kg), dominated by payload; kept for reference.
+_COMMON_RANGES = {
     "strength_scale": (0.75, 1.0),
     "friction_scale": (0.4, 1.0),
     "joint_damping":  (0.0, 1.0),
@@ -123,6 +125,14 @@ RANDOM_RANGES = {
     "init_dy":        (-0.3, 0.3),
     "init_yaw":       (-0.3, 0.3),
 }
+RANGES = {
+    "main": {"payload_kg": (0.0, 2.0), **_COMMON_RANGES},
+    "wide": {"payload_kg": (0.0, 5.0), **_COMMON_RANGES},
+}
+RANDOM_RANGES = RANGES["main"]
+
+# Hard axes: beyond the main benchmark, one factor at a time (robustness_eval.py sweep --factors).
+HARD_AXES = ["payload_kg", "push_force_n"]
 
 
 def sample(rng, duration_s, ranges=RANDOM_RANGES):
