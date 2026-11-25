@@ -33,9 +33,12 @@ import perturbations as P
 SWEEP_SCENARIOS = ["stand", "vx_step", "turn", "arc"]
 
 
+STATE = "true"   # set from --state in main()
+
+
 def run_and_print(mpc, model, scene, scenario, pert, label):
     tic = time.perf_counter()
-    metrics, _ = be.run_episode(mpc, model, be.SCENARIOS[scenario], pert)
+    metrics, _ = be.run_episode(mpc, model, be.SCENARIOS[scenario], pert, state=STATE)
     status = f"FELL at {metrics['fall_time_s']:.2f}s" if metrics["fell"] else "ok"
     print(f"[{scene:6s} {scenario:9s} {label:26s}] {status:14s} rmse_v {metrics['rmse_v_steady']:.3f} "
           f"rmse_w {metrics['rmse_w_steady']:.3f} tilt {metrics['max_tilt_deg']:5.1f}deg "
@@ -125,6 +128,8 @@ def main():
                         help="sweep mode: only the hard axes (perturbations.HARD_AXES), all scenarios")
     parser.add_argument("--set", nargs="+", default=[], metavar="KEY=VALUE",
                         help="config overrides, e.g. N=24 terminal_stability=dcm W_mpc.w_stab=1e6")
+    parser.add_argument("--state", default="true", choices=be.STATE_SOURCES,
+                        help="controller state: simulator truth (Phases 1-2) or nominal-model estimate (real robot)")
     parser.add_argument("--tag", default=None, help="default: baseline_<ranges> / baseline_hard")
     parser.add_argument("--out", default=os.path.join(be.dir_path, "results"))
     args = parser.parse_args()
@@ -139,6 +144,8 @@ def main():
     if args.scenarios is None:
         args.scenarios = SWEEP_SCENARIOS if args.mode == "sweep" else list(be.SCENARIOS)
 
+    global STATE
+    STATE = args.state
     overrides = be.apply_overrides(be.config, args.set)
     os.chdir(be.repo_root)
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -146,7 +153,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     meta = dict(date=stamp, mode=args.mode, tag=args.tag, git=be.git_info(be.repo_root),
                 scenes=args.scenes, scenarios=args.scenarios, factors=args.factors,
-                seeds=args.seeds, base_seed=args.base_seed, overrides=overrides,
+                seeds=args.seeds, base_seed=args.base_seed, overrides=overrides, state=args.state,
                 sweep=P.SWEEP, ranges=args.ranges, random_ranges=P.RANGES[args.ranges],
                 nominal_perturbation=P.Perturbation().as_dict(),
                 jax_devices=[str(d) for d in be.jax.devices()])

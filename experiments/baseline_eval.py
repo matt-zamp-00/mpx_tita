@@ -129,13 +129,36 @@ def rmse(x):
     return float(np.sqrt(np.mean(x ** 2))) if x.size else float("nan")
 
 
-def run_episode(mpc, model, scenario, pert=None, residual_fn=None):
+STATE_SOURCES = ("true", "nominal")
+
+
+def nominal_estimate(nominal_model, nominal_data, data):
+    """What the real robot can compute: the measured qpos/qvel through the *nominal* model
+    (kinematics, CoM and CoM velocity), with no knowledge of payload or other perturbations.
+    Fills nominal_data in place; pass it to _gather_raw_state instead of the simulator's data."""
+    nominal_data.qpos[:] = data.qpos
+    nominal_data.qvel[:] = data.qvel
+    mujoco.mj_kinematics(nominal_model, nominal_data)
+    mujoco.mj_comPos(nominal_model, nominal_data)
+    mujoco.mj_comVel(nominal_model, nominal_data)
+    return nominal_data
+
+
+def run_episode(mpc, model, scenario, pert=None, residual_fn=None, state="true"):
     """One episode; returns (metrics dict, trajectory dict). pert: perturbations.Perturbation of
     the simulated robot (None = nominal); the controller always keeps its nominal model.
     residual_fn(t, x0, data, mpc_state) -> task-space residual (8,) or None, called at every WBC
-    step (see mpc_wrapper_dfcip.RESIDUAL_LAYOUT); None = the baseline."""
+    step (see mpc_wrapper_dfcip.RESIDUAL_LAYOUT); None = the baseline.
+    state: where the controller's state (CoM, CoM velocity, wheel poses) comes from:
+      "true"    the simulator (data.subtree_com etc.): privileged, used in Phases 1-2;
+      "nominal" the measured qpos/qvel through the nominal model (nominal_estimate), as on the
+                real robot. Identical to "true" when the plant is not perturbed in mass."""
+    if state not in STATE_SOURCES:
+        raise ValueError(f"state must be one of {STATE_SOURCES}")
+    nominal_model = model
     if pert is not None:
         model = pert.apply_model(model)
+    nominal_data = mujoco.MjData(nominal_model) if state == "nominal" else None
     data = mujoco.MjData(model)
     base_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, config.base_body_name)
     contact_ids = sim_utils.geom_ids(model, config.contact_frame)
@@ -168,7 +191,11 @@ def run_episode(mpc, model, scenario, pert=None, residual_fn=None):
         wbc_due = k % wbc_period == 0
 
         if mpc_due or wbc_due:
-            raw = _gather_raw_state(model, data, base_body_id, contact_ids)
+            if state == "nominal":
+                raw = _gather_raw_state(nominal_model, nominal_estimate(nominal_model, nominal_data, data),
+                                        base_body_id, contact_ids)
+            else:
+                raw = _gather_raw_state(model, data, base_body_id, contact_ids)
             tita_state, x0, theta_prev = mpc.process_state(*raw, theta_prev)
 
         if mpc_due:
@@ -252,6 +279,8 @@ def main():
                              "non-determinism of JAX on the GPU, so this measures how reliable a result is")
     parser.add_argument("--set", nargs="+", default=[], metavar="KEY=VALUE",
                         help="config overrides, e.g. N=24 terminal_stability=dcm W_mpc.w_stab=1e6")
+    parser.add_argument("--state", default="true", choices=STATE_SOURCES,
+                        help="controller state: simulator truth (Phases 1-2) or nominal-model estimate (real robot)")
     args = parser.parse_args()
     overrides = apply_overrides(config, args.set)
 
@@ -261,7 +290,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     meta = dict(
-        date=stamp, tag=args.tag, git=git_info(repo_root), scenes=args.scenes, repeats=args.repeats, overrides=overrides,
+        date=stamp, tag=args.tag, git=git_info(repo_root), scenes=args.scenes, repeats=args.repeats, overrides=overrides, state=args.state,
         scenarios={k: SCENARIOS[k] for k in args.scenarios},
         settle_s=SETTLE_S, fall_tilt_rad=FALL_TILT_RAD, fall_com_height=FALL_COM_HEIGHT,
         config=dict(simulation_frequency=config.simulation_frequency,
@@ -286,7 +315,7 @@ def main():
         for name in args.scenarios:
             for rep in range(args.repeats):
                 tic = time.perf_counter()
-                metrics, traj = run_episode(mpc, model, SCENARIOS[name])
+                metrics, traj = run_episode(mpc, model, SCENARIOS[name], state=args.state)
                 row = dict(scene=scene, scenario=name, repeat=rep, **metrics)
                 rows.append(row)
                 status = f"FELL at {metrics['fall_time_s']:.2f}s" if metrics["fell"] else "ok"

@@ -45,6 +45,13 @@ class Perturbation:
             scale = (m.body_mass[base] + self.payload_kg) / m.body_mass[base]
             m.body_mass[base] *= scale
             m.body_inertia[base] *= scale
+            # body_subtreemass is precomputed at compile time and used by mj_comPos/mj_subtreeVel
+            # (subtree_com = sum(m_i x_i) / subtreemass): recompute it, else the simulator's CoM
+            # is scaled by (M + payload) / M in world coordinates. Bug until 2026-11-25: Phase 2
+            # payload results fed the controller this wrong CoM (see thesis.md).
+            m.body_subtreemass[:] = m.body_mass
+            for i in range(m.nbody - 1, 0, -1):
+                m.body_subtreemass[m.body_parentid[i]] += m.body_subtreemass[i]
         if self.strength_scale != 1.0:
             m.actuator_gear[:, 0] *= self.strength_scale
         if self.friction_scale != 1.0:
