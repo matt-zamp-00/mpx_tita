@@ -129,9 +129,11 @@ def rmse(x):
     return float(np.sqrt(np.mean(x ** 2))) if x.size else float("nan")
 
 
-def run_episode(mpc, model, scenario, pert=None):
+def run_episode(mpc, model, scenario, pert=None, residual_fn=None):
     """One episode; returns (metrics dict, trajectory dict). pert: perturbations.Perturbation of
-    the simulated robot (None = nominal); the controller always keeps its nominal model."""
+    the simulated robot (None = nominal); the controller always keeps its nominal model.
+    residual_fn(t, x0, data, mpc_state) -> task-space residual (8,) or None, called at every WBC
+    step (see mpc_wrapper_dfcip.RESIDUAL_LAYOUT); None = the baseline."""
     if pert is not None:
         model = pert.apply_model(model)
     data = mujoco.MjData(model)
@@ -177,11 +179,13 @@ def run_episode(mpc, model, scenario, pert=None):
 
         if wbc_due:
             tic = time.perf_counter()
+            residual = residual_fn(t, x0, data, mpc_state) if residual_fn is not None else None
             mpc_state, tau, _, _, _, _ = mpc.whole_body_run(
                 mpc_state, x0,
                 jnp.asarray(data.qpos.copy())[None, :], jnp.asarray(data.qvel.copy())[None, :],
                 tita_state[6:9][None, :], tita_state[9:12][None, :],
                 tita_state[12:15][None, :], tita_state[15:18][None, :],
+                residual=None if residual is None else jnp.asarray(residual, dtype=jnp.float64)[None, :],
             )
             tau_np = np.asarray(tau[0])
             wbc_ms.append(1e3 * (time.perf_counter() - tic))

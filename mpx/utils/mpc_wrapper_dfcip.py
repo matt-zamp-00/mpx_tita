@@ -163,6 +163,7 @@ class BatchedMPCControllerWrapper:
         self._ref_gen              = jax.jit(jax.vmap(ref_gen))
         self._whole_body_interface = jax.jit(jax.vmap(whole_body_control, in_axes=(None, None, None, 0, 0, 0, 0, 0, 0, 0, 0, 0)))
         self._build_desired_jit    = jax.jit(self._build_desired_impl)
+        self._apply_residual_jit   = jax.jit(self._apply_residual_impl)
         self._process_state_jit    = jax.jit(self._process_state_impl)
 
         U0 = jnp.tile(config.u_ref, (config.N, 1))
@@ -277,15 +278,25 @@ class BatchedMPCControllerWrapper:
             raise ValueError(f'MPC weights must have the keys of W_mpc["W"] in the same order: {keys}')
         return jnp.diag(jnp.array([float(weights[k]) for k in keys], dtype=jnp.float64))
 
-    def whole_body_run(self, state: MPCState, x0, qpos, qvel, pl_world, pr_world, dpl_world, dpr_world, com_height_target=None, phase="W", ww=None, wp=None, phase_id=None):
+    def whole_body_run(self, state: MPCState, x0, qpos, qvel, pl_world, pr_world, dpl_world, dpr_world, com_height_target=None, phase="W", ww=None, wp=None, phase_id=None,
+                       residual=None, tau_residual=None):
         """WBC with the gains ww (config.W_wbc "weights") and the integral limits wp (config.W_wbc
         com/base/wheel_integral_max), else those of the phase; phase_id = index of the phase in
         config.weight_phases, else that of phase. Inside a jitted caller pass ww, wp and phase_id as
         inputs (else XLA compiles them as constants).
         Updates the integral memory (state.integral) on this step's state before the QP and returns
         it in the returned state: keep that state for the next WBC step. Rule: gain 0 -> integral 0;
-        when phase_id changes from the previous step every integral restarts from 0."""
+        when phase_id changes from the previous step every integral restarts from 0.
+
+        Residual hooks (residual RL, Phase 3); None = the original controller, unchanged:
+          residual      (B, 8) or (8,): task-space residual (method B) added to the feedforward
+                        accelerations of the WBC tasks, see RESIDUAL_LAYOUT. The QP still enforces
+                        friction cones and torque limits.
+          tau_residual  (B, nu) or (nu,): torque residual (method A, ablation) added to the QP output.
+        The returned `desired` includes the task-space residual."""
         desired = self._build_desired_jit(x0, qpos, state, pl_world, pr_world, dpl_world, dpr_world)
+        if residual is not None:
+            desired = self._apply_residual_jit(desired, x0, residual)
         if com_height_target is not None:
             # ROS/Gazebo runs asynchronously and has different contact dynamics.
             # Keep actual vertical task feedback instead of cancelling its PD
@@ -307,7 +318,28 @@ class BatchedMPCControllerWrapper:
         tau_cmd, qddot, fl, fr, integral = self._whole_body_interface(
             ww, wp, jnp.asarray(phase_id, dtype=jnp.float64), qpos, qvel, desired, force_ref, state.integral, x0_b, wheel_vel,
             state.sol.a, state.sol.alpha)
+        if tau_residual is not None:
+            tau_cmd = tau_cmd + jnp.asarray(tau_residual)
         return state.replace(integral=integral), tau_cmd, qddot, fl, fr, desired
+
+    # Task-space residual (method B): 8 channels, all accelerations.
+    RESIDUAL_LAYOUT = (
+        "com_acc_x", "com_acc_y", "com_acc_z",          # m/s^2, world frame
+        "base_alpha_x", "base_alpha_y", "base_alpha_z",  # rad/s^2, world frame (as base_alpha_ref)
+        "lwheel_acc_fwd", "rwheel_acc_fwd",              # m/s^2, along the heading theta = x0[10]
+    )
+
+    def _apply_residual_impl(self, desired, x0, residual):
+        idx = self._index_variables_qp
+        B = desired.shape[0]
+        r = jnp.broadcast_to(jnp.atleast_2d(residual), (B, 8))
+        theta = jnp.broadcast_to(jnp.atleast_2d(x0), (B, jnp.shape(x0)[-1]))[:, 10]
+        heading = jnp.stack([jnp.cos(theta), jnp.sin(theta), jnp.zeros_like(theta)], axis=1)  # (B, 3)
+        desired = desired.at[:, idx['com_acc']:idx['com_acc'] + 3].add(r[:, 0:3])
+        desired = desired.at[:, idx['base_alpha']:idx['base_alpha'] + 3].add(r[:, 3:6])
+        desired = desired.at[:, idx['lwheel_acc']:idx['lwheel_acc'] + 3].add(r[:, 6:7] * heading)
+        desired = desired.at[:, idx['rwheel_acc']:idx['rwheel_acc'] + 3].add(r[:, 7:8] * heading)
+        return desired
 
     def integral_limits(self, phase="W"):
         """Integral limits of a phase (config.W_wbc entry), the wp input of whole_body_run."""
