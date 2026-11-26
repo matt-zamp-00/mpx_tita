@@ -18,6 +18,8 @@ per WBC step (each term clipped to [0, 1]), so a fall loses the remaining steps.
 
 Usage (from the mpx_tita root):
     pixi run python experiments/residual_ars.py train --iters 15          # ~1.5 h on the laptop
+    # keep the laptop awake (a suspend kills the CUDA context and the run hangs):
+    systemd-inhibit --what=sleep:handle-lid-switch pixi run python experiments/residual_ars.py train ...
     pixi run python experiments/residual_ars.py eval  results/<run>/W_best.npy
 
 Output: experiments/results/<timestamp>_ars_<tag>/{meta.json, log.csv, W_iter*.npy, W_best.npy}
@@ -116,7 +118,7 @@ def train(args):
                 git=be.git_info(be.repo_root))
     json.dump(meta, open(os.path.join(out, "meta.json"), "w"), indent=2, default=str)
 
-    W = np.zeros((8, N_OBS))
+    W = np.load(args.init) if args.init else np.zeros((8, N_OBS))
     base_ret, base_m = runner.evaluate(W, TRAIN_CASES)
     best = (base_ret, W.copy())
     rows = [dict(iter=0, ret=base_ret, n_ok=sum(not m["fell"] for m in base_m), wall_s=0.0, sigma_r=0.0, best_dir=base_ret)]
@@ -170,6 +172,7 @@ def main():
     t.add_argument("--seed", type=int, default=0)
     t.add_argument("--state", default="nominal", choices=be.STATE_SOURCES)
     t.add_argument("--tag", default="curbs")
+    t.add_argument("--init", default=None, help="start from these weights (W_iter*.npy) instead of 0")
     e = sub.add_parser("eval")
     e.add_argument("weights")
     e.add_argument("--state", default="nominal", choices=be.STATE_SOURCES)
