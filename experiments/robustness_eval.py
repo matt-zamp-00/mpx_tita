@@ -98,6 +98,8 @@ def mode_random(args, mpc):
     for scene in args.scenes:
         model = load_model(scene)
         for i, scenario in enumerate(args.scenarios):
+            if not be.in_benchmark(args.bench, scene, scenario):
+                continue
             for seed in range(args.seeds):
                 rng = np.random.default_rng([args.base_seed, seed, list(be.SCENARIOS).index(scenario)])
                 pert = P.sample(rng, be.SCENARIOS[scenario]["duration"], P.RANGES[args.ranges])
@@ -124,6 +126,9 @@ def main():
     parser.add_argument("--base-seed", type=int, default=0, help="random mode: changes the whole set")
     parser.add_argument("--ranges", default="main", choices=list(P.RANGES),
                         help="random mode: perturbations.RANGES preset (main = payload 0-2 kg)")
+    parser.add_argument("--bench", default="v2", choices=list(be.BENCHMARKS),
+                        help="random mode: scenes and scene/scenario cases (baseline_eval.BENCHMARKS); "
+                             "v1 = Phase 2 benchmark, v2 = realistic envelope (default since 2026-11-26)")
     parser.add_argument("--hard", action="store_true",
                         help="sweep mode: only the hard axes (perturbations.HARD_AXES), all scenarios")
     parser.add_argument("--set", nargs="+", default=[], metavar="KEY=VALUE",
@@ -138,9 +143,9 @@ def main():
         if args.scenarios is None:
             args.scenarios = list(be.SCENARIOS)
     if args.tag is None:
-        args.tag = ("baseline_hard" if args.hard else "baseline") if args.mode == "sweep" else f"baseline_{args.ranges}"
+        args.tag = ("baseline_hard" if args.hard else "baseline") if args.mode == "sweep" else f"baseline_{args.ranges}_{args.bench}"
     if args.scenes is None:
-        args.scenes = ["flat"] if args.mode == "sweep" else be.SCENES
+        args.scenes = ["flat"] if args.mode == "sweep" else be.BENCHMARKS[args.bench]["scenes"]
     if args.scenarios is None:
         args.scenarios = SWEEP_SCENARIOS if args.mode == "sweep" else list(be.SCENARIOS)
 
@@ -153,7 +158,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     meta = dict(date=stamp, mode=args.mode, tag=args.tag, git=be.git_info(be.repo_root),
                 scenes=args.scenes, scenarios=args.scenarios, factors=args.factors,
-                seeds=args.seeds, base_seed=args.base_seed, overrides=overrides, state=args.state,
+                seeds=args.seeds, base_seed=args.base_seed, overrides=overrides, state=args.state, bench=args.bench,
                 sweep=P.SWEEP, ranges=args.ranges, random_ranges=P.RANGES[args.ranges],
                 nominal_perturbation=P.Perturbation().as_dict(),
                 jax_devices=[str(d) for d in be.jax.devices()])

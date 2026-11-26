@@ -67,7 +67,33 @@ SCENARIOS = {
     "height":    dict(duration=10.0, segments=[(0.0, 0.0, 0.0, H0), (1.0, 0.0, 0.0, 0.30),
                                                (5.0, 0.0, 0.0, 0.38)]),
 }
-SCENES = ["flat", "rough", "perlin", "stairs"]
+SCENES = ["flat", "rough", "perlin", "stairs", "steps", "perlin_mild"]
+
+# Benchmark definitions (robustness_eval.py random --bench).
+#   v1  Phase 2 (2026-11-24): every scenario on flat/rough/perlin/stairs. The stairs scene is a continuous
+#       27 deg staircase (5 cm risers, 10 cm treads, shorter than the 18 cm wheel), and vx_fast drives
+#       at 2 m/s on uneven terrain: partly beyond what this robot should be asked to do blind.
+#   v2  realistic operating envelope (decided 2026-11-26): flat; perlin at 50% amplitude (scene_perlin_mild.xml,
+#       ~6 cm of undulation, passed without perturbation); 1 and 2 cm curbs (scene_steps.xml, the range a
+#       wheel can climb without stepping). At most 1 m/s on terrain (vx_fast only on flat). Rough (3-5 cm
+#       box edges), full perlin and the stairs stay out (see experiments/curb_envelope.py).
+BENCHMARKS = {
+    "v1": dict(scenes=["flat", "rough", "perlin", "stairs"], terrain_max_speed=None),
+    "v2": dict(scenes=["flat", "perlin_mild", "steps"], terrain_max_speed=1.0),
+}
+
+
+def max_speed(scenario):
+    return max(abs(seg[1]) for seg in scenario["segments"])
+
+
+def in_benchmark(bench, scene, scenario_name):
+    """Whether (scene, scenario) is a case of benchmark `bench`."""
+    b = BENCHMARKS[bench]
+    if scene not in b["scenes"]:
+        return False
+    limit = b["terrain_max_speed"]
+    return scene == "flat" or limit is None or max_speed(SCENARIOS[scenario_name]) <= limit
 
 SETTLE_S = 1.5          # seconds after each command change excluded from the "steady" errors
 FALL_TILT_RAD = 1.0     # base tilt (angle between base z-axis and world z) that counts as a fall

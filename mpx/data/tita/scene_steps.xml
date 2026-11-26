@@ -1,0 +1,53 @@
+<mujoco model="tita scene">
+  <!-- Single curbs (benchmark v2, 2026-11-26): platforms 8 m wide in y.
+       backward: 1 cm platform at x in [-2.2, -1.0]; forward: 1 cm at [1.2, 2.4], 2 cm at [3.6, 4.8].
+       Heights: a driven wheel (r = 9 cm) climbs a curb quasi-statically only if friction > tan(phi),
+       cos(phi) = (r - h) / r: with friction 0.6 up to ~1.3 cm; 2 cm needs some momentum. Higher curbs need
+       stepping, which this controller does not do (experiments/curb_envelope.py).
+       Each platform is a step up and a step down. The start pose (origin) is on flat floor. -->
+  <include file="tita.xml"/>
+
+  <statistic center="0 0 0.1" extent="0.8" meansize="0.04"/>
+
+
+
+
+  <!--visual>
+    <headlight diffuse="1 1 1" ambient="1 1 1" specular="0 0 0"/>
+    <rgba fog="1 1 1 1" contactforce='0.5 0. 0. 1'/>
+    <global azimuth="-130" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.85 0.85 0.85" rgb2="0.80 0.80 0.80" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.90 0.90 0.90" rgb2="0.90 0.90 0.90"
+      markrgb="0.5 0.5 0.5" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="8 8" reflectance="0.2"/>
+  </asset-->
+
+  <visual>
+    <headlight diffuse=".8 .8 .8" ambient=".2 .2 .2" specular="1 1 1"/>
+    <rgba force="1 0 0 1"/>
+    <global azimuth="120" elevation="-20"/>
+    <map force="0.01"/>
+    <scale forcewidth="0.3" contactwidth="0.5" contactheight="0.2"/>
+    <quality shadowsize="8192"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="1 1 1" rgb2="1 1 1" width="800" height="800"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="1 1 1" rgb2="1 1 1" markrgb="0 0 0"
+      width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0"/>
+  </asset>
+
+  <worldbody>
+    <geom name="floor" size="0 0 0.01" type="plane" material="groundplane" contype="1" conaffinity="0" priority="1"
+      friction="0.6" condim="3"/>
+    <geom name="step_0" type="box" pos="-1.600 0 0.005" size="0.600 4 0.005" contype="1" conaffinity="0" priority="1" friction="0.6" condim="3" rgba="0.7 0.7 0.75 1"/>
+    <geom name="step_1" type="box" pos="1.800 0 0.005" size="0.600 4 0.005" contype="1" conaffinity="0" priority="1" friction="0.6" condim="3" rgba="0.7 0.7 0.75 1"/>
+    <geom name="step_2" type="box" pos="4.200 0 0.010" size="0.600 4 0.010" contype="1" conaffinity="0" priority="1" friction="0.6" condim="3" rgba="0.7 0.7 0.75 1"/>
+  </worldbody>
+
+
+</mujoco>
